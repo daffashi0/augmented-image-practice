@@ -1,10 +1,9 @@
 package com.example.augmentedimage_java;
 
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.ViewGroup;
 import android.widget.Toast;
 
@@ -20,6 +19,7 @@ import androidx.fragment.app.FragmentOnAttachListener;
 import com.google.android.filament.Engine;
 import com.google.android.filament.filamat.MaterialBuilder;
 import com.google.android.filament.filamat.MaterialPackage;
+import com.google.ar.core.Anchor;
 import com.google.ar.core.AugmentedImage;
 import com.google.ar.core.AugmentedImageDatabase;
 import com.google.ar.core.Config;
@@ -40,6 +40,8 @@ import com.google.ar.sceneform.ux.BaseArFragment;
 import com.google.ar.sceneform.ux.InstructionsController;
 import com.google.ar.sceneform.ux.TransformableNode;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -58,6 +60,9 @@ public class MainActivity extends AppCompatActivity implements
     private Renderable plainVideoModel;
     private Material plainVideoMaterial;
     private MediaPlayer mediaPlayer;
+
+    private final boolean useSingleImage = false;
+    private static final String TAG = MainActivity.class.getSimpleName();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -109,14 +114,11 @@ public class MainActivity extends AppCompatActivity implements
         // You can also prebuild database in you computer and load it directly (see: https://developers.google.com/ar/develop/java/augmented-images/guide#database)
 
         database = new AugmentedImageDatabase(session);
-
-        Bitmap matrixImage = BitmapFactory.decodeResource(getResources(), R.drawable.matrix);
-        Bitmap rabbitImage = BitmapFactory.decodeResource(getResources(), R.drawable.rabbit);
-        Bitmap womenImage = BitmapFactory.decodeResource(getResources(), R.drawable.women);
-        // Every image has to have its own unique String identifier
-        database.addImage("matrix", matrixImage);
-        database.addImage("rabbit", rabbitImage);
-        database.addImage("women", womenImage);
+        try (InputStream is = getAssets().open("example.imgdb")) {
+            database = AugmentedImageDatabase.deserialize(session, is);
+        } catch (IOException e) {
+            Log.e(TAG, "IO exception loading augmented image database.", e);
+        }
 
         config.setAugmentedImageDatabase(database);
 
@@ -141,7 +143,7 @@ public class MainActivity extends AppCompatActivity implements
 
     private void loadMatrixModel() {
         futures.add(ModelRenderable.builder()
-                .setSource(this, Uri.parse("models/Video.glb"))
+                .setSource(this, Uri.parse("models/matrix.glb"))
                 .setIsFilamentGltf(true)
                 .build()
                 .thenAccept(model -> {
@@ -205,7 +207,6 @@ public class MainActivity extends AppCompatActivity implements
 
             // Setting anchor to the center of Augmented Image
             AnchorNode anchorNode = new AnchorNode(augmentedImage.createAnchor(augmentedImage.getCenterPose()));
-
             // If matrix video haven't been placed yet and detected image has String identifier of "matrix"
             if (!matrixDetected && augmentedImage.getName().equals("matrix")) {
                 matrixDetected = true;
@@ -243,7 +244,7 @@ public class MainActivity extends AppCompatActivity implements
                 arFragment.getArSceneView().getScene().addChild(anchorNode);
 
                 futures.add(ModelRenderable.builder()
-                        .setSource(this, Uri.parse("models/Rabbit.glb"))
+                        .setSource(this, Uri.parse("models/rabbit.glb"))
                         .setIsFilamentGltf(true)
                         .build()
                         .thenAccept(rabbitModel -> {
@@ -265,7 +266,7 @@ public class MainActivity extends AppCompatActivity implements
                 arFragment.getArSceneView().getScene().addChild(anchorNode);
 
                 futures.add(ModelRenderable.builder()
-                        .setSource(this, Uri.parse("models/Female.glb"))
+                        .setSource(this, Uri.parse("models/woman.glb"))
                         .setIsFilamentGltf(true)
                         .build()
                         .thenAccept(rabbitModel -> {
@@ -285,4 +286,18 @@ public class MainActivity extends AppCompatActivity implements
                     InstructionsController.TYPE_AUGMENTED_IMAGE_SCAN, false);
         }
     }
+
+    private void removeAnchorNode(AnchorNode nodeToremove) {
+        //Remove an anchor node
+        if (nodeToremove != null) {
+            arFragment.getArSceneView().getScene().removeChild(nodeToremove);
+            nodeToremove.getAnchor().detach();
+            nodeToremove.setParent(null);
+            nodeToremove = null;
+            Toast.makeText(MainActivity.this, "Test Delete - anchorNode removed", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(MainActivity.this, "Test Delete - markAnchorNode was null", Toast.LENGTH_SHORT).show();
+        }
+    }
+
 }
