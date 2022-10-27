@@ -26,6 +26,8 @@ import com.google.ar.core.Config;
 import com.google.ar.core.Session;
 import com.google.ar.core.TrackingState;
 import com.google.ar.sceneform.AnchorNode;
+import com.google.ar.sceneform.Camera;
+import com.google.ar.sceneform.Node;
 import com.google.ar.sceneform.Sceneform;
 import com.google.ar.sceneform.math.Quaternion;
 import com.google.ar.sceneform.math.Vector3;
@@ -40,12 +42,15 @@ import com.google.ar.sceneform.ux.BaseArFragment;
 import com.google.ar.sceneform.ux.InstructionsController;
 import com.google.ar.sceneform.ux.TransformableNode;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 public class MainActivity extends AppCompatActivity implements
         FragmentOnAttachListener,
@@ -53,9 +58,12 @@ public class MainActivity extends AppCompatActivity implements
 
     private final List<CompletableFuture<Void>> futures = new ArrayList<>();
     private ArFragment arFragment;
+    private List<Object> objectList = new ArrayList<>();
+    private Object currentObjectDetected;
     private boolean matrixDetected = false;
     private boolean rabbitDetected = false;
     private boolean womanDetected = false;
+    private boolean objectRendered = false;
     private AugmentedImageDatabase database;
     private Renderable plainVideoModel;
     private Material plainVideoMaterial;
@@ -114,11 +122,15 @@ public class MainActivity extends AppCompatActivity implements
         // You can also prebuild database in you computer and load it directly (see: https://developers.google.com/ar/develop/java/augmented-images/guide#database)
 
         database = new AugmentedImageDatabase(session);
+
+        // Use this to get from prebuilt database
         try (InputStream is = getAssets().open("example.imgdb")) {
             database = AugmentedImageDatabase.deserialize(session, is);
         } catch (IOException e) {
             Log.e(TAG, "IO exception loading augmented image database.", e);
         }
+
+
 
         config.setAugmentedImageDatabase(database);
 
@@ -198,17 +210,38 @@ public class MainActivity extends AppCompatActivity implements
 
     public void onAugmentedImageTrackingUpdate(AugmentedImage augmentedImage) {
         // If there are both images already detected, for better CPU usage we do not need scan for them
-        if (matrixDetected && rabbitDetected && womanDetected) {
+        if (objectList.contains(currentObjectDetected)) {
             return;
         }
 
+        Log.d("LIST AR CHILDREN", arFragment.getArSceneView().getScene().getChildren().toString());
         if (augmentedImage.getTrackingState() == TrackingState.TRACKING
                 && augmentedImage.getTrackingMethod() == AugmentedImage.TrackingMethod.FULL_TRACKING) {
 
             // Setting anchor to the center of Augmented Image
             AnchorNode anchorNode = new AnchorNode(augmentedImage.createAnchor(augmentedImage.getCenterPose()));
+
+            // Detach 1st object if 2nd object rendered
+            List<Node> children = new ArrayList<>(arFragment.getArSceneView().getScene().getChildren());
+            for (int i = 0; i < children.size(); i++) {
+                Node node = children.get(i);
+                if(i > 0){
+                    Node nodeBefore = children.get(i-1);
+                    if (node instanceof AnchorNode) {
+                        if(nodeBefore instanceof AnchorNode){
+                            if (((AnchorNode) nodeBefore).getAnchor() != null) {
+                                ((AnchorNode) nodeBefore).getAnchor().detach();
+                            }
+                        }
+                    }
+                    if (!(nodeBefore instanceof Camera)) {
+                        nodeBefore.setParent(null);
+                    }
+                }
+            }
+
             // If matrix video haven't been placed yet and detected image has String identifier of "matrix"
-            if (!matrixDetected && augmentedImage.getName().equals("matrix")) {
+            if (augmentedImage.getName().equals("matrix")) {
                 matrixDetected = true;
                 Toast.makeText(this, "Matrix tag detected", Toast.LENGTH_LONG).show();
 
@@ -216,6 +249,7 @@ public class MainActivity extends AppCompatActivity implements
                 // This will cause deformation if your AR tag has different aspect ratio than your video
                 anchorNode.setWorldScale(new Vector3(augmentedImage.getExtentX(), 1f, augmentedImage.getExtentZ()));
                 arFragment.getArSceneView().getScene().addChild(anchorNode);
+                objectRendered = true;
 
                 TransformableNode videoNode = new TransformableNode(arFragment.getTransformationSystem());
                 // For some reason it is shown upside down so this will rotate it correctly
@@ -236,12 +270,13 @@ public class MainActivity extends AppCompatActivity implements
             }
             // If rabbit model haven't been placed yet and detected image has String identifier of "rabbit"
             // This is also example of model loading and placing at runtime
-            if (!rabbitDetected && augmentedImage.getName().equals("rabbit")) {
+            if (augmentedImage.getName().equals("rabbit")) {
                 rabbitDetected = true;
                 Toast.makeText(this, "Rabbit tag detected", Toast.LENGTH_LONG).show();
 
                 anchorNode.setWorldScale(new Vector3(3.5f, 3.5f, 3.5f));
                 arFragment.getArSceneView().getScene().addChild(anchorNode);
+                objectRendered = true;
 
                 futures.add(ModelRenderable.builder()
                         .setSource(this, Uri.parse("models/rabbit.glb"))
@@ -258,12 +293,13 @@ public class MainActivity extends AppCompatActivity implements
                                     return null;
                                 }));
             }
-            if (!womanDetected && augmentedImage.getName().equals("women")) {
+            if (augmentedImage.getName().equals("women")) {
                 womanDetected = true;
                 Toast.makeText(this, "Rabbit tag detected", Toast.LENGTH_LONG).show();
 
                 anchorNode.setWorldScale(new Vector3(3.5f, 3.5f, 3.5f));
                 arFragment.getArSceneView().getScene().addChild(anchorNode);
+                objectRendered = true;
 
                 futures.add(ModelRenderable.builder()
                         .setSource(this, Uri.parse("models/woman.glb"))
@@ -281,7 +317,7 @@ public class MainActivity extends AppCompatActivity implements
                                 }));
             }
         }
-        if (matrixDetected && rabbitDetected && womanDetected) {
+        if (matrixDetected) {
             arFragment.getInstructionsController().setEnabled(
                     InstructionsController.TYPE_AUGMENTED_IMAGE_SCAN, false);
         }
