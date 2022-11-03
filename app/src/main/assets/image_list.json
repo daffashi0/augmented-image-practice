@@ -1,0 +1,17 @@
+[
+  {
+    "name": "matrix",
+    "url": "matrix.mp4",
+    "isVideo": true
+  },
+  {
+    "name": "rabbit",
+    "url": "rabbit.glb",
+    "isVideo": false
+  },
+  {
+    "name": "woman",
+    "url": "woman.glb",
+    "isVideo": false
+  }
+]

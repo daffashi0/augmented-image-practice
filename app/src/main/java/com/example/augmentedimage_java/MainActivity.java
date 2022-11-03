@@ -1,5 +1,8 @@
 package com.example.augmentedimage_java;
 
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
@@ -16,10 +19,13 @@ import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentOnAttachListener;
 
+import com.example.augmentedimage_java.daos.ImageDao;
+import com.example.augmentedimage_java.models.Image;
+import com.example.augmentedimage_java.models.ImageList;
+import com.example.augmentedimage_java.models.ImageStatus;
 import com.google.android.filament.Engine;
 import com.google.android.filament.filamat.MaterialBuilder;
 import com.google.android.filament.filamat.MaterialPackage;
-import com.google.ar.core.Anchor;
 import com.google.ar.core.AugmentedImage;
 import com.google.ar.core.AugmentedImageDatabase;
 import com.google.ar.core.Config;
@@ -39,27 +45,28 @@ import com.google.ar.sceneform.rendering.Renderable;
 import com.google.ar.sceneform.rendering.RenderableInstance;
 import com.google.ar.sceneform.ux.ArFragment;
 import com.google.ar.sceneform.ux.BaseArFragment;
-import com.google.ar.sceneform.ux.InstructionsController;
 import com.google.ar.sceneform.ux.TransformableNode;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.lang.reflect.Type;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
 public class MainActivity extends AppCompatActivity implements
         FragmentOnAttachListener,
         BaseArFragment.OnSessionConfigurationListener {
 
+    private Context context;
+
     private final List<CompletableFuture<Void>> futures = new ArrayList<>();
     private ArFragment arFragment;
     private List<Object> objectList = new ArrayList<>();
     private Object currentObjectDetected;
+    private String detectedImageName;
+    private String prevDetectedImageName;
     private boolean matrixDetected = false;
     private boolean rabbitDetected = false;
     private boolean womanDetected = false;
@@ -71,10 +78,36 @@ public class MainActivity extends AppCompatActivity implements
 
     private final boolean useSingleImage = false;
     private static final String TAG = MainActivity.class.getSimpleName();
+    private ImageList imageList;
+    private ImageDao imageDao;
+    private List<ImageList> augmentedImages;
+    private ImageRepository mRepository;
+    private List<ImageStatus> imageStatuses = new ArrayList<ImageStatus>();
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        String jsonFileString = Utils.getJsonFromAssets(getApplicationContext(), "image_list.json");
+        Log.i("data", jsonFileString);
+
+        Gson gson = new Gson();
+        Type listUserType = new TypeToken<List<ImageList>>() { }.getType();
+
+        augmentedImages = gson.fromJson(jsonFileString, listUserType);
+        for (int i = 0; i < augmentedImages.size(); i++) {
+            Log.i("images", String.valueOf(augmentedImages));
+            imageStatuses.add(new ImageStatus(augmentedImages.get(i).getName(), false));
+        }
+
+//        mRepository = new ImageRepository(getApplication());
+//        mRepository.getAllWords().observe(this, images -> {
+//            augmentedImages = images;
+//            if(images.size() != 0){
+//                images.forEach(image -> imageStatuses.add(new ImageStatus(image.getName(), false)));
+//            }
+//        });
 
         setContentView(R.layout.activity_main);
         Toolbar toolbar = findViewById(R.id.toolbar);
@@ -123,14 +156,13 @@ public class MainActivity extends AppCompatActivity implements
 
         database = new AugmentedImageDatabase(session);
 
-        // Use this to get from prebuilt database
-        try (InputStream is = getAssets().open("example.imgdb")) {
-            database = AugmentedImageDatabase.deserialize(session, is);
-        } catch (IOException e) {
-            Log.e(TAG, "IO exception loading augmented image database.", e);
+        // Every image has to have its own unique String identifier
+        if(augmentedImages != null){
+            for (int i = 0; i < augmentedImages.size(); i++){
+                Bitmap object3d = BitmapFactory.decodeResource(getResources(), getResources().getIdentifier(augmentedImages.get(i).getName(), "drawable", getPackageName()));
+                database.addImage(augmentedImages.get(i).getName(), object3d);
+            }
         }
-
-
 
         config.setAugmentedImageDatabase(database);
 
@@ -209,11 +241,6 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     public void onAugmentedImageTrackingUpdate(AugmentedImage augmentedImage) {
-        // If there are both images already detected, for better CPU usage we do not need scan for them
-        if (objectList.contains(currentObjectDetected)) {
-            return;
-        }
-
         Log.d("LIST AR CHILDREN", arFragment.getArSceneView().getScene().getChildren().toString());
         if (augmentedImage.getTrackingState() == TrackingState.TRACKING
                 && augmentedImage.getTrackingMethod() == AugmentedImage.TrackingMethod.FULL_TRACKING) {
@@ -241,86 +268,72 @@ public class MainActivity extends AppCompatActivity implements
             }
 
             // If matrix video haven't been placed yet and detected image has String identifier of "matrix"
-            if (augmentedImage.getName().equals("matrix")) {
-                matrixDetected = true;
-                Toast.makeText(this, "Matrix tag detected", Toast.LENGTH_LONG).show();
+            String imageName;
+            for(int i = 0; i < augmentedImages.size(); i++){
+                imageName = augmentedImages.get(i).getName();
+                if(augmentedImage.getName().equals(imageName)){
+                    if (findImageByName(imageStatuses, imageName).isDetected() == false){
+                        if(detectedImageName != null){
+                            prevDetectedImageName = detectedImageName;
+                            findImageByName(imageStatuses, prevDetectedImageName).setDetected(false);
+                        }
+                        detectedImageName = imageName;
+                        findImageByName(imageStatuses, imageName).setDetected(true);
+                        if (augmentedImages.get(i).isVideo()){
+                            Toast.makeText(this, imageName+" tag detected", Toast.LENGTH_LONG).show();
 
-                // AnchorNode placed to the detected tag and set it to the real size of the tag
-                // This will cause deformation if your AR tag has different aspect ratio than your video
-                anchorNode.setWorldScale(new Vector3(augmentedImage.getExtentX(), 1f, augmentedImage.getExtentZ()));
-                arFragment.getArSceneView().getScene().addChild(anchorNode);
-                objectRendered = true;
+                            // AnchorNode placed to the detected tag and set it to the real size of the tag
+                            // This will cause deformation if your AR tag has different aspect ratio than your video
+                            anchorNode.setWorldScale(new Vector3(augmentedImage.getExtentX(), 1f, augmentedImage.getExtentZ()));
+                            arFragment.getArSceneView().getScene().addChild(anchorNode);
+                            objectRendered = true;
 
-                TransformableNode videoNode = new TransformableNode(arFragment.getTransformationSystem());
-                // For some reason it is shown upside down so this will rotate it correctly
-                videoNode.setLocalRotation(Quaternion.axisAngle(new Vector3(0, 1f, 0), 180f));
-                anchorNode.addChild(videoNode);
+                            TransformableNode videoNode = new TransformableNode(arFragment.getTransformationSystem());
+                            // For some reason it is shown upside down so this will rotate it correctly
+                            videoNode.setLocalRotation(Quaternion.axisAngle(new Vector3(0, 1f, 0), 180f));
+                            anchorNode.addChild(videoNode);
 
-                // Setting texture
-                ExternalTexture externalTexture = new ExternalTexture();
-                RenderableInstance renderableInstance = videoNode.setRenderable(plainVideoModel);
-                renderableInstance.setMaterial(plainVideoMaterial);
+                            // Setting texture
+                            ExternalTexture externalTexture = new ExternalTexture();
+                            RenderableInstance renderableInstance = videoNode.setRenderable(plainVideoModel);
+                            renderableInstance.setMaterial(plainVideoMaterial);
 
-                // Setting MediaPLayer
-                renderableInstance.getMaterial().setExternalTexture("videoTexture", externalTexture);
-                mediaPlayer = MediaPlayer.create(this, R.raw.matrix);
-                mediaPlayer.setLooping(true);
-                mediaPlayer.setSurface(externalTexture.getSurface());
-                mediaPlayer.start();
-            }
-            // If rabbit model haven't been placed yet and detected image has String identifier of "rabbit"
-            // This is also example of model loading and placing at runtime
-            if (augmentedImage.getName().equals("rabbit")) {
-                rabbitDetected = true;
-                Toast.makeText(this, "Rabbit tag detected", Toast.LENGTH_LONG).show();
+                            // Setting MediaPLayer
+                            renderableInstance.getMaterial().setExternalTexture("videoTexture", externalTexture);
+                            mediaPlayer = MediaPlayer.create(this, getResources().getIdentifier(imageName, "raw", getPackageName()));
+                            mediaPlayer.setLooping(true);
+                            mediaPlayer.setSurface(externalTexture.getSurface());
+                            mediaPlayer.start();
+                        } else {
+                            Toast.makeText(this, imageName+" tag detected", Toast.LENGTH_LONG).show();
 
-                anchorNode.setWorldScale(new Vector3(3.5f, 3.5f, 3.5f));
-                arFragment.getArSceneView().getScene().addChild(anchorNode);
-                objectRendered = true;
+                            anchorNode.setWorldScale(new Vector3(0.4f, 0.4f, 0.4f));
+                            arFragment.getArSceneView().getScene().addChild(anchorNode);
+                            objectRendered = true;
 
-                futures.add(ModelRenderable.builder()
-                        .setSource(this, Uri.parse("models/rabbit.glb"))
-                        .setIsFilamentGltf(true)
-                        .build()
-                        .thenAccept(rabbitModel -> {
-                            TransformableNode modelNode = new TransformableNode(arFragment.getTransformationSystem());
-                            modelNode.setRenderable(rabbitModel);
-                            anchorNode.addChild(modelNode);
-                        })
-                        .exceptionally(
-                                throwable -> {
-                                    Toast.makeText(this, "Unable to load rabbit model", Toast.LENGTH_LONG).show();
-                                    return null;
-                                }));
-            }
-            if (augmentedImage.getName().equals("women")) {
-                womanDetected = true;
-                Toast.makeText(this, "Rabbit tag detected", Toast.LENGTH_LONG).show();
-
-                anchorNode.setWorldScale(new Vector3(3.5f, 3.5f, 3.5f));
-                arFragment.getArSceneView().getScene().addChild(anchorNode);
-                objectRendered = true;
-
-                futures.add(ModelRenderable.builder()
-                        .setSource(this, Uri.parse("models/woman.glb"))
-                        .setIsFilamentGltf(true)
-                        .build()
-                        .thenAccept(rabbitModel -> {
-                            TransformableNode modelNode = new TransformableNode(arFragment.getTransformationSystem());
-                            modelNode.setRenderable(rabbitModel);
-                            anchorNode.addChild(modelNode);
-                        })
-                        .exceptionally(
-                                throwable -> {
-                                    Toast.makeText(this, "Unable to load rabbit model", Toast.LENGTH_LONG).show();
-                                    return null;
-                                }));
+                            futures.add(ModelRenderable.builder()
+                                    .setSource(this, Uri.parse("models/"+imageName+".glb"))
+                                    .setIsFilamentGltf(true)
+                                    .build()
+                                    .thenAccept(model3d -> {
+                                        TransformableNode modelNode = new TransformableNode(arFragment.getTransformationSystem());
+                                        modelNode.setRenderable(model3d);
+                                        anchorNode.addChild(modelNode);
+                                    })
+                                    .exceptionally(
+                                            throwable -> {
+                                                Toast.makeText(this, "Unable to load 3d model", Toast.LENGTH_LONG).show();
+                                                return null;
+                                            }));
+                        }
+                    }
+                }
             }
         }
-        if (matrixDetected) {
-            arFragment.getInstructionsController().setEnabled(
-                    InstructionsController.TYPE_AUGMENTED_IMAGE_SCAN, false);
-        }
+    }
+
+    public static ImageStatus findImageByName(List<ImageStatus> listImage, String name){
+        return listImage.stream().filter(imageStatus -> name.equals(imageStatus.getName())).findFirst().orElse(null);
     }
 
     private void removeAnchorNode(AnchorNode nodeToremove) {
@@ -335,5 +348,4 @@ public class MainActivity extends AppCompatActivity implements
             Toast.makeText(MainActivity.this, "Test Delete - markAnchorNode was null", Toast.LENGTH_SHORT).show();
         }
     }
-
 }
